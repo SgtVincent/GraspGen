@@ -12,19 +12,18 @@ RUN pip install h5py hydra-core matplotlib meshcat scikit-learn scipy tensorboar
 # Install scene_synthesizer
 RUN pip install scene-synthesizer[recommend]
 
-RUN pip install torch==2.1.0 torchvision
+# Install pyrender
+RUN pip install imageio pickle5 opencv-python python-fcl pyrender==0.1.45 pyglet==2.1.6 && pip install PyOpenGL==3.1.5
+
+RUN pip install torch==2.1.0+cu121 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # Install torch_cluster
 RUN pip install torch-cluster -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
 
-RUN pip install imageio pickle5 opencv-python python-fcl
-
-# Install pyrender
-RUN pip install pyrender==0.1.45 pyglet==2.1.6 && pip install PyOpenGL==3.1.5
-
 # Install pointnet2 modules
 COPY pointnet2_ops pointnet2_ops
-RUN pip install ./pointnet2_ops
+# RUN pip install ./pointnet2_ops
+RUN pip install --no-build-isolation ./pointnet2_ops
 
 # Diffusion dependencies
 RUN pip install diffusers==0.11.1 timm==1.0.15

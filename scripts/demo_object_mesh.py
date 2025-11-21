@@ -7,23 +7,19 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import argparse
+import time
 import os
 import numpy as np
 import torch
 import trimesh
 import trimesh.transformations as tra
 from pathlib import Path
+from datetime import date
 
 from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
-from grasp_gen.utils.meshcat_utils import (
-    create_visualizer,
-    get_color_from_score,
-    get_normals_from_mesh,
-    make_frame,
-    visualize_grasp,
-    visualize_mesh,
-    visualize_pointcloud,
-)
+# Legacy meshcat utilities are accessed via `mutils` alias below
+from grasp_gen.utils import meshcat_utils as mutils
+from grasp_gen.utils import viser_utils as vutils
 from grasp_gen.utils.point_cloud_utils import point_cloud_outlier_removal
 from grasp_gen.dataset.dataset_utils import sample_points
 from grasp_gen.dataset.eval_utils import save_to_isaac_grasp_format
@@ -91,6 +87,11 @@ def parse_args():
         action="store_true",
         help="Disable meshcat visualization",
     )
+    parser.add_argument(
+        "--use-viser",
+        action="store_true",
+        help="Use Viser instead of MeshCat for visualization",
+    )
 
     return parser.parse_args()
 
@@ -99,6 +100,7 @@ def load_mesh_data(mesh_file, scale, num_sample_points):
     """Load mesh data and sample points from surface."""
     if mesh_file.endswith("ply"):
         import open3d as o3d
+
 
         pcd = o3d.io.read_point_cloud(mesh_file)
         xyz = np.array(pcd.points).astype(np.float32)
@@ -141,7 +143,8 @@ if __name__ == "__main__":
         args.topk_num_grasps = 100
 
     # Create visualizer unless visualization is disabled
-    vis = None if args.no_visualization else create_visualizer()
+    vis_utils = vutils if args.use_viser else mutils
+    vis = None if args.no_visualization else vis_utils.create_visualizer()
 
     # Load grasp configuration and initialize sampler
     grasp_cfg = load_grasp_cfg(args.gripper_config)
@@ -156,8 +159,8 @@ if __name__ == "__main__":
 
     # Visualize original mesh
     if not args.no_visualization and obj_mesh is not None:
-        visualize_mesh(vis, "object_mesh", obj_mesh, color=[169, 169, 169])
-        visualize_pointcloud(vis, "pc", pc, pc_color, size=0.0025)
+        vis_utils.visualize_mesh(vis, "object_mesh", obj_mesh, color=[169, 169, 169])
+        vis_utils.visualize_pointcloud(vis, "pc", pc, pc_color, size=0.0025)
 
     # Run inference on point cloud
     grasps_inferred, grasp_conf_inferred = GraspGenSampler.run_inference(
@@ -172,7 +175,7 @@ if __name__ == "__main__":
     if len(grasps_inferred) > 0:
         grasp_conf_inferred = grasp_conf_inferred.cpu().numpy()
         grasps_inferred = grasps_inferred.cpu().numpy()
-        scores_inferred = get_color_from_score(grasp_conf_inferred, use_255_scale=True)
+        scores_inferred = vis_utils.get_color_from_score(grasp_conf_inferred, use_255_scale=True)
         print(
             f"Inferred {len(grasps_inferred)} grasps, with scores ranging from {grasp_conf_inferred.min():.3f} - {grasp_conf_inferred.max():.3f}"
         )
@@ -180,7 +183,7 @@ if __name__ == "__main__":
         # Visualize inferred grasps
         if not args.no_visualization:
             for j, grasp in enumerate(grasps_inferred):
-                visualize_grasp(
+                vis_utils.visualize_grasp(
                     vis,
                     f"grasps_objectpc_filtered/{j:03d}/grasp",
                     grasp,
@@ -193,15 +196,26 @@ if __name__ == "__main__":
         grasps_inferred = np.array(
             [tra.inverse_matrix(T_subtract_pc_mean) @ g for g in grasps_inferred]
         )
-
-        # Save grasps to file only if output_file is not empty
-        if args.output_file != "":
-            print(f"Saving predicted grasps to {args.output_file}")
-            save_to_isaac_grasp_format(
-                grasps_inferred, grasp_conf_inferred, args.output_file
-            )
+        # Determine output path per argument help: if empty, use outputs/YYYY-MM-DD/latest/output_grasps.yml
+        if args.output_file == "":
+            date_str = date.today().isoformat()
+            out_dir = Path("outputs") / date_str / "latest"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_file = out_dir / "output_grasps.yml"
         else:
-            print("No output file specified, skipping grasp saving")
+            out_file = Path(args.output_file)
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+
+        print(f"Saving predicted grasps to {out_file}")
+        save_to_isaac_grasp_format(grasps_inferred, grasp_conf_inferred, str(out_file))
 
     else:
         print("No grasps found from inference!")
+
+    # Keep Viser server live to inspect visualization if requested
+    if args.use_viser and not args.no_visualization and vis is not None:
+        try:
+            while True:
+                time.sleep(10.0)
+        except KeyboardInterrupt:
+            print("Shutting down viewer")

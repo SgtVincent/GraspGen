@@ -109,6 +109,16 @@ def create_visualizer(clear=True):
     return vis
 
 
+def clear_visualization(vis: meshcat.Visualizer):
+    try:
+        if vis is None:
+            return
+        # Delete all objects in the visualizer
+        vis.delete()
+    except Exception as e:
+        logger.error("MeshCat clear_visualization failed: %s", e)
+
+
 def make_frame(
     vis: meshcat.Visualizer,
     name: str,

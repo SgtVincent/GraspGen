@@ -7,6 +7,7 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import argparse
+import time
 import glob
 import json
 import os
@@ -20,14 +21,10 @@ from IPython import embed
 
 from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
 from grasp_gen.utils.meshcat_utils import (
-    create_visualizer,
-    get_color_from_score,
     get_normals_from_mesh,
-    make_frame,
-    visualize_grasp,
-    visualize_mesh,
-    visualize_pointcloud,
 )
+from grasp_gen.utils import meshcat_utils as mutils
+from grasp_gen.utils import viser_utils as vutils
 from grasp_gen.utils.point_cloud_utils import point_cloud_outlier_removal
 
 
@@ -65,6 +62,16 @@ def parse_args():
         help="Whether to return only the top k grasps",
     )
     parser.add_argument(
+        "--use-viser",
+        action="store_true",
+        help="Use Viser instead of MeshCat for visualization",
+    )
+    parser.add_argument(
+        "--no-visualization",
+        action="store_true",
+        help="Disable visualization",
+    )
+    parser.add_argument(
         "--topk_num_grasps",
         type=int,
         default=-1,
@@ -76,7 +83,7 @@ def parse_args():
 
 def process_point_cloud(pc, grasps, grasp_conf):
     """Process point cloud and grasps by centering them."""
-    scores = get_color_from_score(grasp_conf, use_255_scale=True)
+    scores = mutils.get_color_from_score(grasp_conf, use_255_scale=True)
     print(f"Scores with min {grasp_conf.min():.3f} and max {grasp_conf.max():.3f}")
 
     # Ensure grasps have correct homogeneous coordinate
@@ -106,7 +113,8 @@ if __name__ == "__main__":
         args.topk_num_grasps = 100
 
     json_files = glob.glob(os.path.join(args.sample_data_dir, "*.json"))
-    vis = create_visualizer()
+    vis_utils = vutils if args.use_viser else mutils
+    vis = None if args.no_visualization else vis_utils.create_visualizer()
 
     grasp_cfg = load_grasp_cfg(args.gripper_config)
 
@@ -117,7 +125,8 @@ if __name__ == "__main__":
 
     for json_file in json_files:
         print(f"Processing {json_file}")
-        vis.delete()
+        if vis is not None:
+            vis_utils.clear_visualization(vis)
 
         # Load data from JSON
         data = json.load(open(json_file, "rb"))
@@ -132,7 +141,7 @@ if __name__ == "__main__":
         )
 
         # Visualize original point cloud
-        visualize_pointcloud(vis, "pc", pc_centered, pc_color, size=0.0025)
+        vis_utils.visualize_pointcloud(vis, "pc", pc_centered, pc_color, size=0.0025)
 
         # Filter point cloud
         pc_filtered, pc_removed = point_cloud_outlier_removal(
@@ -140,7 +149,7 @@ if __name__ == "__main__":
         )
         pc_filtered = pc_filtered.numpy()
         pc_removed = pc_removed.numpy()
-        visualize_pointcloud(vis, "pc_removed", pc_removed, [255, 0, 0], size=0.003)
+        vis_utils.visualize_pointcloud(vis, "pc_removed", pc_removed, [255, 0, 0], size=0.003)
 
         # Run inference on filtered point cloud
         grasps_inferred, grasp_conf_inferred = GraspGenSampler.run_inference(
@@ -155,7 +164,7 @@ if __name__ == "__main__":
             grasp_conf_inferred = grasp_conf_inferred.cpu().numpy()
             grasps_inferred = grasps_inferred.cpu().numpy()
             grasps_inferred[:, 3, 3] = 1
-            scores_inferred = get_color_from_score(
+            scores_inferred = vis_utils.get_color_from_score(
                 grasp_conf_inferred, use_255_scale=True
             )
             print(
@@ -164,7 +173,7 @@ if __name__ == "__main__":
 
             # Visualize inferred grasps
             for j, grasp in enumerate(grasps_inferred):
-                visualize_grasp(
+                vis_utils.visualize_grasp(
                     vis,
                     f"grasps_objectpc_filtered/{j:03d}/grasp",
                     grasp,
@@ -177,3 +186,11 @@ if __name__ == "__main__":
             print("No grasps found from inference! Skipping to next object...")
 
         input("Press Enter to continue to next object...")
+
+    # Keep Viser server live to inspect visualization if requested
+    if args.use_viser and not args.no_visualization and vis is not None:
+        try:
+            while True:
+                time.sleep(10.0)
+        except KeyboardInterrupt:
+            print("Shutting down viewer")

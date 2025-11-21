@@ -124,6 +124,9 @@ We have added scripts for visualizing grasp predictions on real world point clou
 
 1. **Dataset:** Please [download checkpoints](#download-checkpoints) first - this will be the `<path_to_models_repo>` below.
 2. **MeshCat:** All the examples below are visualized on MeshCat in a browser. You can start a MeshCat server in a new terminal (in any environment, install with `pip install meshcat`) with the following command: `meshcat-server`. You can also just run a dedicated docker container in the background `bash docker/run_meshcat.sh`. Navigate to the corresponding url on the browser (it should be printed when you start the server) - the results will be visualized here.
+ - **MeshCat / Viser:** All the examples below are visualized on MeshCat by default, but you can optionally use [Viser](https://viser.dev/) instead by passing the `--use-viser` flag to our demo scripts (e.g., `--use-viser`). To use MeshCat, start a meshcat server with `meshcat-server` or run the provided docker helper `bash docker/run_meshcat.sh`.
+ 
+ 
 3. **Docker:** The first argument is the path to where you have locally cloned the GraspGen repository (always required). Use `--models` flag for the models directory. These will be mounted at `/code` and `/models` paths inside the container respectively. 
 ```bash
 # For inference only

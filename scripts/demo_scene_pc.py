@@ -20,14 +20,10 @@ from tqdm import tqdm
 
 from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
 from grasp_gen.utils.meshcat_utils import (
-    create_visualizer,
-    get_color_from_score,
     get_normals_from_mesh,
-    make_frame,
-    visualize_grasp,
-    visualize_mesh,
-    visualize_pointcloud,
 )
+from grasp_gen.utils import meshcat_utils as mutils
+from grasp_gen.utils import viser_utils as vutils
 from grasp_gen.utils.point_cloud_utils import (
     point_cloud_outlier_removal_with_color,
     filter_colliding_grasps,
@@ -37,7 +33,7 @@ from grasp_gen.robot import get_gripper_info
 
 def process_grasps_for_visualization(pc, grasps, grasp_conf, pc_colors=None):
     """Process grasps and point cloud for visualization by centering them."""
-    scores = get_color_from_score(grasp_conf, use_255_scale=True)
+    scores = mutils.get_color_from_score(grasp_conf, use_255_scale=True)
     print(f"Scores with min {grasp_conf.min():.3f} and max {grasp_conf.max():.3f}")
 
     # Ensure grasps have correct homogeneous coordinate
@@ -109,6 +105,11 @@ def parse_args():
         default=8192,
         help="Maximum number of scene points to use for collision checking (for speed optimization)",
     )
+    parser.add_argument(
+        "--use-viser",
+        action="store_true",
+        help="Use Viser instead of MeshCat for visualization",
+    )
     return parser.parse_args()
 
 
@@ -148,12 +149,12 @@ if __name__ == "__main__":
 
     # Initialize GraspGenSampler once
     grasp_sampler = GraspGenSampler(grasp_cfg)
-
-    vis = create_visualizer()
+    vis_utils = vutils if args.use_viser else mutils
+    vis = vis_utils.create_visualizer()
 
     for json_file in json_files:
         print(json_file)
-        vis.delete()
+        vis_utils.clear_visualization(vis)
 
         data = json.load(open(json_file, "rb"))
 
@@ -183,7 +184,7 @@ if __name__ == "__main__":
         xyz_scene = xyz_scene[mask_within_bounds]
         xyz_scene_color = xyz_scene_color[mask_within_bounds]
 
-        visualize_pointcloud(vis, "pc_scene", xyz_scene, xyz_scene_color, size=0.0025)
+        vis_utils.visualize_pointcloud(vis, "pc_scene", xyz_scene, xyz_scene_color, size=0.0025)
 
         obj_pc, pc_removed, obj_pc_color, obj_pc_color_removed = (
             point_cloud_outlier_removal_with_color(
@@ -195,7 +196,7 @@ if __name__ == "__main__":
         obj_pc_color = obj_pc_color.cpu().numpy()
         obj_pc_color_removed = obj_pc_color_removed.cpu().numpy()
 
-        visualize_pointcloud(vis, "pc_obj", obj_pc, obj_pc_color, size=0.005)
+        vis_utils.visualize_pointcloud(vis, "pc_obj", obj_pc, obj_pc_color, size=0.005)
 
         grasps, grasp_conf = GraspGenSampler.run_inference(
             obj_pc,
@@ -274,7 +275,7 @@ if __name__ == "__main__":
             for j, grasp in enumerate(grasps_to_visualize):
                 color = scores_to_use[j] if not args.filter_collisions else [0, 185, 0]
 
-                visualize_grasp(
+                vis_utils.visualize_grasp(
                     vis,
                     f"grasps/{j:03d}/grasp",
                     tra.inverse_matrix(T_center) @ grasp,
@@ -288,7 +289,7 @@ if __name__ == "__main__":
                 for j, grasp in enumerate(
                     colliding_grasps[:20]
                 ):  # Limit to first 20 for clarity
-                    visualize_grasp(
+                    vis_utils.visualize_grasp(
                         vis,
                         f"colliding/{j:03d}/grasp",
                         tra.inverse_matrix(T_center) @ grasp,
@@ -379,3 +380,11 @@ if __name__ == "__main__":
             input("Press Enter to continue to next scene...")
         else:
             print("No grasps found! Skipping to next scene...")
+
+        # Keep Viser server live after processing files if requested
+        if args.use_viser and vis is not None:
+            try:
+                while True:
+                    time.sleep(10.0)
+            except KeyboardInterrupt:
+                print("Shutting down viewer")

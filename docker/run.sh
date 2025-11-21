@@ -143,14 +143,30 @@ if [ -n "$RESULTS_DIR" ]; then
 fi
 echo ""
 
-xhost +local:root
+# xhost +local:root
+# docker run \
+#   --privileged \
+#   -e NVIDIA_DISABLE_REQUIRE=1 \
+#   -e NVIDIA_DRIVER_CAPABILITIES=all \
+#   --device /dev/dri \
+#   -it \
+#   -e DISPLAY \
+#   $VOLUME_MOUNTS \
+#   --gpus all \
+#   --net host \
+#   --shm-size 40G \
+#   graspgen:latest \
+#   /bin/bash \
+#   -c "cd /code/ && pip install -e . && bash" \
+# xhost -local:root
+
+
 docker run \
   --privileged \
   -e NVIDIA_DISABLE_REQUIRE=1 \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   --device /dev/dri \
-  -it \
-  -e DISPLAY \
+  -itd \
   $VOLUME_MOUNTS \
   --gpus all \
   --net host \
@@ -158,4 +174,3 @@ docker run \
   graspgen:latest \
   /bin/bash \
   -c "cd /code/ && pip install -e . && bash" \
-xhost -local:root

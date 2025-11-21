@@ -19,14 +19,8 @@ from IPython import embed
 from tqdm import tqdm
 
 from grasp_gen.grasp_server import GraspGenSampler, load_grasp_cfg
-from grasp_gen.utils.meshcat_utils import (
-    create_visualizer,
-    get_color_from_score,
-    make_frame,
-    visualize_grasp,
-    visualize_mesh,
-    visualize_pointcloud,
-)
+from grasp_gen.utils import meshcat_utils as mutils
+from grasp_gen.utils import viser_utils as vutils
 from grasp_gen.utils.point_cloud_utils import (
     point_cloud_outlier_removal,
     knn_points,
@@ -112,13 +106,18 @@ def parse_args():
         action="store_true",
         help="Whether to visualize the results",
     )
+    parser.add_argument(
+        "--use-viser",
+        action="store_true",
+        help="Use Viser instead of MeshCat for visualization",
+    )
 
     return parser.parse_args()
 
 
 def process_point_cloud(pc, grasps, grasp_conf, pc_colors=None):
     """Process point cloud and grasps by centering them."""
-    scores = get_color_from_score(grasp_conf, use_255_scale=True)
+    scores = mutils.get_color_from_score(grasp_conf, use_255_scale=True)
     print(f"Scores with min {grasp_conf.min():.3f} and max {grasp_conf.max():.3f}")
 
     # Ensure grasps have correct homogeneous coordinate
@@ -230,8 +229,10 @@ if __name__ == "__main__":
     print(f"Gripper collision mesh has {len(gripper_collision_mesh.vertices)} vertices")
 
     # Initialize visualization if requested
+    vis_utils = vutils if args.use_viser else mutils
+    vis = None
     if args.visualize:
-        vis = create_visualizer()
+        vis = vis_utils.create_visualizer()
 
     # Filter object point cloud to remove outliers
     filter_start = time.time()
@@ -359,21 +360,21 @@ if __name__ == "__main__":
 
         # Visualize scene point cloud - use RGB colors if available, otherwise use gray
         if scene_colors_centered is not None:
-            visualize_pointcloud(
+            vis_utils.visualize_pointcloud(
                 vis, "scene_pc", scene_pc_centered, scene_colors_centered, size=0.002
             )
         else:
-            visualize_pointcloud(
+            vis_utils.visualize_pointcloud(
                 vis, "scene_pc", scene_pc_centered, [128, 128, 128], size=0.002
             )
 
         # Visualize object point cloud - use RGB colors if available, otherwise use green
         if object_colors_centered is not None:
-            visualize_pointcloud(
+            vis_utils.visualize_pointcloud(
                 vis, "object_pc", pc_centered, object_colors_centered, size=0.0025
             )
         else:
-            visualize_pointcloud(
+            vis_utils.visualize_pointcloud(
                 vis, "object_pc", pc_centered, [0, 255, 0], size=0.0025
             )
 
@@ -381,7 +382,7 @@ if __name__ == "__main__":
         for i, (grasp, score) in enumerate(
             zip(collision_free_grasps, collision_free_colors)
         ):
-            visualize_grasp(
+            vis_utils.visualize_grasp(
                 vis,
                 f"collision_free_grasps/{i:03d}/grasp",
                 grasp,
@@ -395,7 +396,7 @@ if __name__ == "__main__":
         for i, grasp in enumerate(
             colliding_grasps[:20]
         ):  # Limit to first 20 for clarity
-            visualize_grasp(
+            vis_utils.visualize_grasp(
                 vis,
                 f"colliding_grasps/{i:03d}/grasp",
                 grasp,
@@ -417,3 +418,11 @@ if __name__ == "__main__":
             f"Collision-free grasps are shown in their quality colors, colliding grasps (up to 20) are shown in red."
         )
         input("Press Enter to exit...")
+
+    # Keep Viser server live to inspect visualization if requested
+    if args.use_viser and args.visualize and vis is not None:
+        try:
+            while True:
+                time.sleep(10.0)
+        except KeyboardInterrupt:
+            print("Shutting down viewer")

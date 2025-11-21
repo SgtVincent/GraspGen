@@ -2,6 +2,8 @@ pickle5
 h5py
 hydra-core
 matplotlib
+# use viser to replace meshcat for better visualization
+viser
 meshcat
 numpy==1.26.4
 webdataset
