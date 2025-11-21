@@ -296,3 +296,54 @@ def load_urdf_scene(urdf_path: str) -> URDF:
         force_collision_mesh=False,
     )
     return scene
+
+
+def dump_merged_urdf_mesh(urdf_path: str) -> "trimesh.Trimesh | None":
+    """Load a URDF scene and return a single merged Trimesh (visual or collision).
+
+    Returns None if no geometry could be assembled.
+    """
+    scene = load_urdf_scene(urdf_path)
+    trimesh_scene = getattr(scene, "scene", None) or getattr(scene, "collision_scene", None)
+    if trimesh_scene is None:
+        return None
+    try:
+        merged = trimesh_scene.dump(concatenate=True)
+        return merged
+    except Exception:
+        # Fallback: concatenate geometries manually
+        geoms = []
+        for g in getattr(trimesh_scene, "geometry", {}).values():
+            try:
+                geoms.append(trimesh.Trimesh(vertices=g.vertices.copy(), faces=g.faces.copy()))
+            except Exception:
+                continue
+        if geoms:
+            return trimesh.util.concatenate(geoms)
+        return None
+
+
+def find_base_config_size(urdf_path: str) -> float | None:
+    """Search common locations for base_config.yaml and return the `size` value
+    if present. Returns None when not found.
+
+    Search order: urdf parent, urdf parent parent, GraspGenModels/custom_objects/<obj>/base_config.yaml
+    """
+    p = Path(urdf_path)
+    # candidates
+    candidates = [p.parent, p.parent.parent, Path.cwd() / "GraspGenModels" / "custom_objects" / p.parent.name]
+    for c in candidates:
+        bc = c / "base_config.yaml"
+        if bc.exists():
+            try:
+                with bc.open("r") as f:
+                    doc = yaml.safe_load(f)
+                if isinstance(doc, list):
+                    for item in doc:
+                        if isinstance(item, dict) and "size" in item:
+                            return float(item["size"])
+                elif isinstance(doc, dict) and "size" in doc:
+                    return float(doc["size"])
+            except Exception:
+                continue
+    return None
