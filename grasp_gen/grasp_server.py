@@ -113,8 +113,10 @@ class GraspGenSampler:
             grasps: Generated grasp poses
             grasp_conf: Confidence scores for the grasps
         """
-        if type(object_pc) == np.ndarray:
-            object_pc = torch.from_numpy(object_pc).cuda().float()
+        if isinstance(object_pc, np.ndarray):
+            # move input points to the same device as the model
+            device = next(grasp_sampler.model.parameters()).device
+            object_pc = torch.from_numpy(object_pc).to(device).float()
 
         if grasp_threshold == -1.0 and topk_num_grasps == -1:
             topk_num_grasps = 100

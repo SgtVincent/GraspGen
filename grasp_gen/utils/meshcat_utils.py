@@ -239,6 +239,56 @@ def visualize_pointcloud(
         vis[name].set_transform(transform)
 
 
+def _compute_focus_center_radius(points: np.ndarray):
+    pts = np.asarray(points)
+    if pts.size == 0:
+        return None
+    if pts.ndim == 1:
+        try:
+            pts = pts.reshape(-1, 3)
+        except Exception:
+            pts = pts.reshape(1, -1)
+    elif pts.shape[1] > 3:
+        pts = pts[:, :3]
+
+    bbox_min = np.min(pts, axis=0)
+    bbox_max = np.max(pts, axis=0)
+    center = 0.5 * (bbox_min + bbox_max)
+    radius = np.linalg.norm(bbox_max - bbox_min)
+    if not np.isfinite(radius) or radius < 1e-4:
+        try:
+            radius = np.max(np.linalg.norm(pts - center, axis=1))
+        except Exception:
+            radius = 0.25
+    if not np.isfinite(radius) or radius < 1e-4:
+        radius = 0.25
+    return center, radius
+
+
+def focus_camera_on_points(
+    vis: meshcat.Visualizer,
+    points: np.ndarray,
+    up: Optional[np.ndarray] = None,
+    distance_scale: float = 2.0,
+):
+    """Aim the MeshCat default camera at the bounding box of ``points``."""
+    if vis is None:
+        return
+    center_radius = _compute_focus_center_radius(points)
+    if center_radius is None:
+        return
+    center, radius = center_radius
+    up_vec = np.array([0.0, 0.0, 1.0]) if up is None else np.asarray(up, dtype=np.float32)
+    dist = max(radius * distance_scale, 0.25)
+    eye = center + np.array([dist, dist, dist * 0.75])
+    try:
+        cam_tf = mtf.look_at(eye, center, up_vec)
+        vis["/Cameras/default"].set_transform(cam_tf)
+        vis["/Cameras/default/rotated/<object>"].set_transform(np.identity(4))
+    except Exception as e:
+        logger.debug("MeshCat camera focus failed: %s", e)
+
+
 def load_visualization_gripper_points(
     gripper_name: str = "franka_panda",
 ) -> List[np.ndarray]:

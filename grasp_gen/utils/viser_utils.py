@@ -120,17 +120,25 @@ def visualize_pointcloud(
             return
         if pc.ndim == 3:
             pc = pc.reshape(-1, pc.shape[-1])
+        
         if color is not None:
             if isinstance(color, list):
                 color = np.array(color)
             color = np.array(color)
-            if color.ndim == 3:
-                color = color.reshape(-1, color.shape[-1])
+            
+            # If single color provided, broadcast it
             if color.ndim == 1:
-                color = np.ones_like(pc) * np.array(color)
-            colors = color.astype(np.float32) / 255.0
+                color = np.tile(color, (pc.shape[0], 1))
+            elif color.ndim == 3:
+                color = color.reshape(-1, color.shape[-1])
+            
+            # Handle float 0-1 vs uint8 0-255
+            if color.dtype.kind in ('f', 'c') and color.max() <= 1.0:
+                colors = (color * 255).astype(np.uint8)
+            else:
+                colors = color.astype(np.uint8)
         else:
-            colors = np.ones_like(pc).astype(np.float32)
+            colors = np.ones((pc.shape[0], 3), dtype=np.uint8) * 255
 
         # Decide whether we should apply transform to the positions
         if transform is not None and not getattr(server, "_supports_set_object_transform", False):
@@ -138,18 +146,15 @@ def visualize_pointcloud(
         else:
             pc_to_add = pc
 
-        # Use default colors if needed
-        default_colors = colors if colors is not None else np.ones_like(pc_to_add).astype(np.float32)
         # Standardize on calling the keyword-based signature. Provide size/shape.
         point_size = float(size) if size is not None else 0.0025
         # Default shape chosen to be 'square' to match previous MeshCat style.
         point_shape = kwargs.get("point_shape", "square")
         try:
-            c = colors if colors is not None else default_colors
             server.scene.add_point_cloud(
                 f"/{name}",
                 points=pc_to_add.astype(float),
-                colors=c,
+                colors=colors,
                 point_size=point_size,
                 point_shape=point_shape,
             )
@@ -158,8 +163,8 @@ def visualize_pointcloud(
                 server.scene.add_point_cloud(
                     f"/{name}",
                     points=pc_to_add.astype(float),
+                    colors=colors,
                     point_size=point_size,
-                    point_shape=point_shape,
                 )
             except Exception as e:
                 logger.error("Viser add_point_cloud failed: %s", e)
@@ -170,6 +175,128 @@ def visualize_pointcloud(
             server.scene.set_object_transform(f"/{name}", transform)
     except Exception as e:
         logger.error("Viser visualize_pointcloud failed: %s", e)
+
+
+def _compute_focus_center_radius(points: np.ndarray):
+    pts = np.asarray(points)
+    if pts.size == 0:
+        return None
+    if pts.ndim == 1:
+        try:
+            pts = pts.reshape(-1, 3)
+        except Exception:
+            pts = pts.reshape(1, -1)
+    elif pts.shape[1] > 3:
+        pts = pts[:, :3]
+
+    bbox_min = np.min(pts, axis=0)
+    bbox_max = np.max(pts, axis=0)
+    center = 0.5 * (bbox_min + bbox_max)
+    radius = np.linalg.norm(bbox_max - bbox_min)
+    if not np.isfinite(radius) or radius < 1e-4:
+        try:
+            radius = np.max(np.linalg.norm(pts - center, axis=1))
+        except Exception:
+            radius = 0.35
+    if not np.isfinite(radius) or radius < 1e-4:
+        radius = 0.35
+    return center, radius
+
+
+def _focus_client_camera(client: Any, position: np.ndarray, target: np.ndarray, up_vec: np.ndarray) -> bool:
+    if client is None:
+        return False
+    camera = getattr(client, "camera", None)
+    if camera is None:
+        return False
+
+    def _apply():
+        try:
+            if hasattr(camera, "position"):
+                camera.position = tuple(position.tolist())
+            if hasattr(camera, "look_at"):
+                camera.look_at = tuple(target.tolist())
+            if hasattr(camera, "up"):
+                camera.up = tuple(up_vec.tolist())
+        except Exception as exc:
+            logger.debug("Viser client camera update failed: %s", exc)
+            raise
+
+    try:
+        atomic_ctx = getattr(client, "atomic", None)
+        if callable(atomic_ctx):
+            with client.atomic():
+                _apply()
+        else:
+            _apply()
+        if hasattr(client, "flush"):
+            try:
+                client.flush()
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
+
+def _apply_camera_focus(server: Any, position: np.ndarray, target: np.ndarray, up_vec: np.ndarray):
+    scene = getattr(server, "scene", None)
+    applied = False
+
+    if scene is not None and hasattr(scene, "set_camera_look_at"):
+        try:
+            scene.set_camera_look_at(
+                position=tuple(position.tolist()),
+                look_at=tuple(target.tolist()),
+                up=tuple(up_vec.tolist()),
+            )
+            applied = True
+        except Exception as exc:
+            logger.debug("Viser scene camera focus failed: %s", exc)
+
+    clients_attr = getattr(server, "clients", None)
+    client_handles: List[Any] = []
+    if isinstance(clients_attr, dict):
+        client_handles = list(clients_attr.values())
+    elif isinstance(clients_attr, (list, tuple, set)):
+        client_handles = list(clients_attr)
+    elif clients_attr is not None:
+        client_handles = [clients_attr]
+
+    for handle in client_handles:
+        applied = _focus_client_camera(handle, position, target, up_vec) or applied
+
+    if hasattr(server, "on_client_connect") and not getattr(server, "_auto_focus_registered", False):
+        try:
+            def _apply_on_connect(client_handle: Any):
+                params = getattr(server, "_last_focus_params", None)
+                if not params:
+                    return
+                pos, tgt, up_inner = params
+                _focus_client_camera(client_handle, pos, tgt, up_inner)
+
+            server.on_client_connect(_apply_on_connect)
+            server._auto_focus_registered = True
+        except Exception:
+            pass
+
+    server._last_focus_params = (position, target, up_vec)
+    if not applied:
+        logger.debug("Viser camera focus deferred; waiting for clients")
+
+
+def focus_camera_on_points(server: Any, points: np.ndarray, up: Optional[np.ndarray] = None):
+    """Aim all connected Viser cameras at the bounding box of ``points``."""
+    if server is None:
+        return
+    center_radius = _compute_focus_center_radius(points)
+    if center_radius is None:
+        return
+    center, radius = center_radius
+    up_vec = np.array([0.0, 0.0, 1.0]) if up is None else np.asarray(up, dtype=np.float32)
+    distance = max(radius * 2.0, 0.35)
+    position = center + np.array([distance, distance, max(distance * 0.7, 0.35)])
+    _apply_camera_focus(server, position, center, up_vec)
 
 
 def make_frame(server: Any, name: str, h: float = 0.15, radius: float = 0.01, o: float = 1.0, T: Optional[np.ndarray] = None):
@@ -219,10 +346,14 @@ def visualize_grasp(
         supports_transform = getattr(server, "_supports_set_object_transform", False)
         # Determine color tuple
         if isinstance(color, (list, np.ndarray)):
-            col = tuple(int(c) for c in list(color)[:3])
+            c_list = list(color)[:3]
+            if len(c_list) < 3:
+                c_list = (c_list + [0, 0, 0])[:3]
+            col = (int(c_list[0]), int(c_list[1]), int(c_list[2]))
         elif isinstance(color, float) or isinstance(color, np.floating):
             # map score to RGB via existing helper
-            col = tuple(int(c) for c in get_color_from_score(color, use_255_scale=True))
+            c_arr = get_color_from_score(color, use_255_scale=True)
+            col = (int(c_arr[0]), int(c_arr[1]), int(c_arr[2]))
         else:
             col = (255, 0, 0)
         pts_list = []
@@ -301,7 +432,40 @@ def clear_visualization(server: Any):
     try:
         if server is None:
             return
-        # Clear the Viser scene if present
-        server.scene.clear()
+        # Prefer the Viser API `reset()` which clears the scene and GUI.
+        # Older/newer Viser versions may not expose `clear()` — use `reset`
+        # and if that's unavailable fall back to removing handles individually.
+        if hasattr(server, "scene") and hasattr(server.scene, "reset"):
+            try:
+                server.scene.reset()
+                return
+            except Exception:
+                # fall through to handle-by-handle removal
+                pass
+
+        # Fallback: iterate through scene handles and call remove() where available.
+        try:
+            # Try to safely iterate and remove nodes/handles
+            if hasattr(server.scene, "get_all_handles"):
+                handles = server.scene.get_all_handles()
+            elif hasattr(server.scene, "handles"):
+                handles = list(server.scene.handles.values())
+            else:
+                handles = []
+
+            for h in handles:
+                try:
+                    if hasattr(h, "remove"):
+                        h.remove()
+                    elif hasattr(server.scene, "remove"):
+                        # Some versions expose a scene.remove(name)
+                        name = getattr(h, "name", None)
+                        if name is not None:
+                            server.scene.remove(name)
+                except Exception:
+                    continue
+        except Exception:
+            # If removal fails, just log and continue - nothing else to do
+            pass
     except Exception as e:
         logger.error("Viser clear_visualization failed: %s", e)
